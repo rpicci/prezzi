@@ -1,0 +1,32 @@
+openapi: 3.0.3
+info:
+  title: Price Watch API
+  version: 1.0.0
+paths:
+  /api/auth/login:
+    post:
+      summary: Login
+  /api/products:
+    get:
+      summary: Lista prodotti dell'utente
+    post:
+      summary: Crea monitoraggio
+  /api/products/{id}:
+    get:
+      summary: Dettaglio prodotto
+    patch:
+      summary: Modifica monitoraggio
+    delete:
+      summary: Elimina monitoraggio
+  /api/products/{id}/prices:
+    get:
+      summary: Storico prezzi
+  /api/products/{id}/check:
+    post:
+      summary: Esegue un controllo immediato
+  /api/notifications:
+    get:
+      summary: Lista notifiche
+  /api/settings:
+    patch:
+      summary: Impostazioni utente

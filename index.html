@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+  <title>Price Watch</title>
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <div class="brand">Price Watch</div>
+    <div class="subtitle">Monitoraggio prezzi</div>
+  </div>
+  <button id="installBtn" class="secondary hidden">Installa</button>
+</header>
+
+<main>
+  <section id="dashboard">
+    <div class="section-head">
+      <div>
+        <h1>I tuoi prodotti</h1>
+        <p class="muted">Controlla prezzi e storico in un unico posto.</p>
+      </div>
+      <button id="addBtn" class="primary">+ Aggiungi</button>
+    </div>
+    <div id="cards" class="grid"></div>
+    <div id="empty" class="empty hidden">
+      <h2>Nessun prodotto</h2>
+      <p>Aggiungi il primo prodotto da monitorare.</p>
+      <button class="primary" onclick="openAdd()">Aggiungi prodotto</button>
+    </div>
+  </section>
+
+  <section id="detail" class="hidden"></section>
+
+  <section id="add" class="panel hidden">
+    <div class="section-head">
+      <div><h1>Nuovo monitoraggio</h1><p class="muted">Configura il controllo quotidiano.</p></div>
+      <button class="secondary" onclick="showDashboard()">Chiudi</button>
+    </div>
+    <form id="productForm">
+      <label>URL del prodotto<input id="url" type="url" required placeholder="https://negozio.it/prodotto"></label>
+      <label>Nome<input id="name" required placeholder="es. Garmin Enduro 3"></label>
+      <div class="two">
+        <label>Prezzo attuale (€)<input id="price" type="number" step="0.01" min="0" required placeholder="529"></label>
+        <label>Prezzo obiettivo (€)<input id="target" type="number" step="0.01" min="0" placeholder="500"></label>
+      </div>
+      <div class="two">
+        <label>Controlli<input id="frequency" value="1 volta al giorno"></label>
+        <label>Ora<input id="time" type="time" value="08:30"></label>
+      </div>
+      <label>Notifica<input id="rule" value="Solo se diminuisce o raggiunge l'obiettivo"></label>
+      <button class="primary full" type="submit">Salva monitoraggio</button>
+    </form>
+  </section>
+</main>
+
+<nav class="bottom">
+  <button onclick="showDashboard()">⌂ Home</button>
+  <button onclick="openAdd()">＋ Prodotto</button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
