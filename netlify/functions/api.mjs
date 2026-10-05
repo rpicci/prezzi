@@ -22,7 +22,8 @@ function sanitize(c) {
 }
 
 export default async (req) => {
-  if (process.env.APP_KEY && req.headers.get("x-key") !== process.env.APP_KEY) return J({ error: "Non autorizzato" }, 401);
+  const KEY = (process.env.APP_KEY || "").trim();
+  if (KEY && (req.headers.get("x-key") || "").trim() !== KEY) return J({ error: "Non autorizzato" }, 401);
   const route = new URL(req.url).pathname.replace(/^\/api\//, "");
   const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
   try {
