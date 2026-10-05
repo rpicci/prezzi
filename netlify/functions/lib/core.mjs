@@ -53,17 +53,35 @@ async function serpapi(params) {
   return j;
 }
 
-// Preferisce il link diretto al negozio; se è un link Google usa la pagina prodotto
-const goodLink = (i) => {
-  const notGoogle = (u) => u && !/^https?:\/\/([a-z0-9-]+\.)*google\.[a-z.]+\//i.test(u);
-  return notGoogle(i.link) ? i.link : i.product_link || i.link || "";
-};
+// Scarta i link Google non utilizzabili; "spacchetta" i redirect che contengono l'indirizzo del negozio
+function cleanLink(u) {
+  if (!u) return "";
+  try {
+    const x = new URL(u);
+    if (/(^|\.)google\./i.test(x.hostname)) {
+      for (const k of ["adurl", "url", "q"]) { const v = x.searchParams.get(k); if (v && /^https?:\/\//i.test(v)) return v; }
+      return "";
+    }
+    return u;
+  } catch { return ""; }
+}
+const searchLink = (name, shop) => "https://www.google.com/search?q=" + encodeURIComponent(name + " " + shop);
 
 async function searchSerpapi(q) {
   const j = await serpapi({ engine: "google_shopping", q, gl: "it", hl: "it", google_domain: "google.it" });
   return (j.shopping_results || []).map((i) => ({
     title: i.title, shop: i.source || "", price: i.extracted_price ?? parsePrice(i.price),
-    link: goodLink(i), used: !!i.second_hand_condition, src: "shopping",
+    link: i.link || "", token: i.immersive_product_page_token || "", used: !!i.second_hand_condition, src: "shopping",
+  }));
+}
+
+// Pagina prodotto Google: elenca tutti i negozi che vendono quel prodotto
+async function searchStores(token, title) {
+  const j = await serpapi({ engine: "google_immersive_product", page_token: token, more_stores: "true" });
+  const stores = j.product_results?.stores || j.stores || j.stores_results || [];
+  return stores.map((x) => ({
+    title, shop: x.name || "", price: x.extracted_price ?? parsePrice(x.price), link: x.link || "", src: "stores",
+    used: /usat|ricondiz|refurb|second/i.test([x.tag, ...(Array.isArray(x.details_and_offers) ? x.details_and_offers : [])].join(" ")),
   }));
 }
 
@@ -129,6 +147,16 @@ const TRUSTED = [
 const isTrusted = (shop, brand) =>
   TRUSTED.some((t) => norm(shop).includes(t)) || (brand.length >= 3 && compact(shop).includes(brand));
 
+function titleOk(title, p) {
+  const w = words(p.name);
+  const required = [w[0], ...w.filter((x) => /\d/.test(x))].filter(Boolean);
+  const nameN = norm(p.name);
+  const ex = [...DEFAULT_EXCLUDE.filter((x) => !nameN.includes(x)), ...(p.exclude || []).map(norm)].filter(Boolean);
+  const c = compact(title), t = norm(title);
+  return required.every((r) => c.includes(compact(r))) &&
+    !ex.some((x) => new RegExp("(^|[^a-z0-9])" + x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z0-9]|$)").test(t));
+}
+
 export function filterOffers(items, p) {
   const w = words(p.name);
   const brand = w[0] || "";
@@ -173,39 +201,53 @@ export function filterOffers(items, p) {
 
 // ---------- ricerca prodotto ----------
 async function checkProduct(p, usage, reserve = 0) {
-  const src = { amazon: true, web: true, ...(p.sources || {}) };
+  const src = { compare: true, amazon: false, web: false, ...(p.sources || {}) };
   const notes = [];
   const lim = +process.env.SERPAPI_LIMIT || 250;
 
   const shopping = async (q) => {
-    let prov = allocate(usage);
+    const prov = allocate(usage);
     try { return await call(prov, q); }
     catch (e) {
       if (prov === "serpapi" && process.env.SERPER_KEY) { usage.serper = (usage.serper || 0) + 1; return await call("serper", q); }
       throw e;
     }
   };
-  // Amazon e web usano solo SerpApi e lasciano sempre una ricerca di riserva per ogni prodotto
+  // Fonti extra: solo SerpApi, lasciando sempre una ricerca di riserva per ogni prodotto
   const extra = async (name, fn) => {
     if (!process.env.SERPAPI_KEY) { notes.push(`${name}: serve SERPAPI_KEY`); return []; }
     if ((usage.serpapi || 0) >= lim - reserve) { notes.push(`${name}: quota SerpApi quasi esaurita, saltata`); return []; }
     usage.serpapi = (usage.serpapi || 0) + 1;
-    try { return await fn(p.name); } catch (e) { notes.push(`${name}: ${e.name === "TimeoutError" ? "timeout" : e.message}`); return []; }
+    try { return await fn(); } catch (e) { notes.push(`${name}: ${e.name === "TimeoutError" ? "timeout" : e.message}`); return []; }
   };
 
-  const [main, am, web] = await Promise.all([
-    shopping(p.name),
-    src.amazon ? extra("Amazon", searchAmazon) : [],
-    src.web ? extra("Web", searchWeb) : [],
+  const shopAndCompare = async () => {
+    const main = await shopping(p.name);
+    let stores = [];
+    if (src.compare) {
+      const card = main.find((i) => i.token && i.price > 0 && titleOk(i.title, p));
+      if (!card) notes.push("Confronto negozi: nessuna scheda prodotto corrispondente");
+      else stores = await extra("Confronto negozi", () => searchStores(card.token, card.title));
+    }
+    return { main, stores };
+  };
+
+  const [sc, am, web] = await Promise.all([
+    shopAndCompare(),
+    src.amazon ? extra("Amazon", () => searchAmazon(p.name)) : [],
+    src.web ? extra("Web", () => searchWeb(p.name)) : [],
   ]);
-  let items = [...main, ...am, ...web];
+  let items = [...sc.main, ...sc.stores, ...am, ...web];
   let f = filterOffers(items, p);
   if (!f.offers.length && p.ean) { items = [...items, ...(await shopping(p.ean))]; f = filterOffers(items, p); }
-  const offers = f.offers.slice(0, 10).map((o) => ({ shop: o.shop, title: o.title, price: o.price, link: o.link, trusted: o.trusted, src: o.src }));
+  const offers = f.offers.slice(0, 10).map((o) => {
+    const l = cleanLink(o.link);
+    return { shop: o.shop, title: o.title, price: o.price, link: l || searchLink(p.name, o.shop), direct: !!l, trusted: o.trusted, src: o.src };
+  });
   return {
     id: p.id, name: p.name, found: f.matched, total: f.total, notes,
     dropped: f.dropped.slice(0, 25), offers, best: offers[0] || null,
-    counts: { shopping: main.length, amazon: am.length, web: web.length },
+    counts: { shopping: sc.main.length, stores: sc.stores.length, amazon: am.length, web: web.length },
   };
 }
 
