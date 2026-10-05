@@ -16,7 +16,7 @@ function sanitize(c) {
       exclude: (Array.isArray(p.exclude) ? p.exclude : []).map((s) => String(s).trim()).filter(Boolean).slice(0, 20),
       minPrice: num(p.minPrice), maxPrice: num(p.maxPrice), targetPrice: num(p.targetPrice),
       onlyTrusted: !!p.onlyTrusted,
-      sources: { amazon: p.sources?.amazon !== false, web: p.sources?.web !== false },
+      sources: { compare: p.sources?.compare !== false, amazon: !!p.sources?.amazon, web: !!p.sources?.web },
       blocked: (Array.isArray(p.blocked) ? p.blocked : []).map(String).slice(-50),
     })).filter((p) => p.name),
   };
