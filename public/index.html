@@ -48,6 +48,7 @@ dialog::backdrop{background:#000a}
 
 <h2>Quota API</h2>
 <div class="card mu" id="usage"></div>
+<button class="g" id="resetkey">Cambia chiave di accesso</button>
 
 <dialog id="dlg">
   <h2 style="margin-top:0" id="dt">Prodotto</h2>
@@ -74,9 +75,13 @@ const safe=u=>/^https?:\/\//.test(u)?esc(u):"#";
 const fmt=n=>n==null?"–":"€ "+n.toFixed(2).replace(".",",");
 let S=null,editing=null;
 
-async function api(path,body){
-  const r=await fetch("/api/"+path,{method:body?"POST":"GET",headers:{"content-type":"application/json","x-key":localStorage.getItem("pw_key")||""},body:body?JSON.stringify(body):undefined});
-  if(r.status===401){const k=prompt("Chiave di accesso");if(k){localStorage.setItem("pw_key",k);return api(path,body);}throw new Error("Accesso negato");}
+async function api(path,body,retried){
+  const r=await fetch("/api/"+path,{method:body?"POST":"GET",headers:{"content-type":"application/json","x-key":(localStorage.getItem("pw_key")||"").trim()},body:body?JSON.stringify(body):undefined});
+  if(r.status===401){
+    const k=(prompt(retried?"Chiave errata. Riprova (attenzione a maiuscole e spazi):":"Chiave di accesso (APP_KEY impostata su Netlify):")||"").trim();
+    if(!k)throw new Error("Accesso negato: chiave non inserita. Ricarica la pagina.");
+    localStorage.setItem("pw_key",k);return api(path,body,true);
+  }
   const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j;
 }
 const msg=t=>$("#msg").textContent=t||"";
@@ -99,12 +104,19 @@ function chart(h,target){
   return s;
 }
 
+function dropList(r){
+  const d=r.dropped||[];
+  const diag=`<div class="mu">Trovati ${r.total} · corrispondenti ${r.found} · offerte valide ${r.offers.length}</div>`;
+  if(!d.length)return diag;
+  return diag+`<details><summary class="mu">Scartati (${d.length})</summary>`+d.map(x=>`<div class="mu" style="padding:5px 0;border-top:1px solid var(--line)"><div class="row sp"><span>${esc(x.shop)} · ${fmt(x.price)}</span><span class="up">${esc(x.why)}</span></div><div>${esc((x.title||"").slice(0,80))}</div></div>`).join("")+`</details>`;
+}
+
 function card(p){
   const r=(S.last?.results||[]).find(x=>x.id===p.id),h=S.hist[p.id]||[];
   let body='<div class="mu">Nessun controllo ancora</div>';
   if(r){
     if(r.error)body=`<div class="up">${esc(r.error)}</div>`;
-    else if(!r.best)body=`<div class="mu">Nessuna offerta valida (${r.found} corrispondenze su ${r.total} risultati)</div>`;
+    else if(!r.best)body=`<div class="mu">Nessuna offerta valida</div>`+dropList(r);
     else{
       const b=r.best,d=r.delta,m=h.length?h.reduce((x,y)=>y.p<x.p?y:x):null;
       let minLine="";
@@ -115,7 +127,7 @@ function card(p){
       +(d?`<div class="${d<0?"dn":"up"}">${d<0?"▼":"▲"} ${fmt(Math.abs(d))} vs ultimo controllo</div>`:"")
       +minLine+chart(h,p.targetPrice)
       +`<details><summary class="mu">Offerte di oggi (${r.offers.length})</summary>`
-      +r.offers.map((o,i)=>`<div class="mu" style="padding:6px 0;border-top:1px solid var(--line)"><div class="row sp"><span>${esc(o.shop)}${o.trusted?"":" ⚠"}</span><a href="${safe(o.link)}" target="_blank" rel="noopener">${fmt(o.price)}</a></div><div class="row sp"><span style="flex:1">${esc((o.title||"").slice(0,70))}</span><button class="r" style="padding:4px 8px;font-size:12px" data-fp="${esc(p.id)}" data-oi="${i}">Falso positivo</button></div></div>`).join("")+`</details>`;
+      +r.offers.map((o,i)=>`<div class="mu" style="padding:6px 0;border-top:1px solid var(--line)"><div class="row sp"><span>${esc(o.shop)}${o.trusted?"":" ⚠"}</span><a href="${safe(o.link)}" target="_blank" rel="noopener">${fmt(o.price)}</a></div><div class="row sp"><span style="flex:1">${esc((o.title||"").slice(0,70))}</span><button class="r" style="padding:4px 8px;font-size:12px" data-fp="${esc(p.id)}" data-oi="${i}">Falso positivo</button></div></div>`).join("")+`</details>`+dropList(r);
     }
   }
   const hist=h.length?`<details><summary class="mu">Storico (${h.length})</summary>`+[...h].reverse().map(x=>`<div class="row sp mu" style="padding:5px 0;border-top:1px solid var(--line)"><span>${fmtD(x.d)} · ${fmt(x.p)} · ${esc(x.s)}</span><button class="r" style="padding:3px 8px;font-size:12px" data-hp="${esc(p.id)}" data-hd="${esc(x.d)}">✕</button></div>`).join("")+`</details>`:"";
@@ -183,10 +195,13 @@ $("#save").onclick=async()=>{
 };
 $("#del").onclick=async()=>{if(!confirm("Eliminare il prodotto?"))return;try{await saveConfig({...S.config,products:S.config.products.filter(x=>x.id!==editing)});$("#dlg").close();}catch(e){msg(e.message);}};
 
+$("#resetkey").onclick=()=>{localStorage.removeItem("pw_key");location.reload();};
+
 // push
 const b64=s=>{const p="=".repeat((4-s.length%4)%4),r=atob((s+p).replace(/-/g,"+").replace(/_/g,"/"));return Uint8Array.from([...r].map(c=>c.charCodeAt(0)));};
 $("#pushbtn").onclick=async()=>{
   try{
+    if(!S)return msg("Dati non caricati: ricarica la pagina");
     if(!S.vapid)return msg("Chiave VAPID mancante su Netlify");
     if(await Notification.requestPermission()!=="granted")return msg("Permesso negato");
     const reg=await navigator.serviceWorker.ready;
