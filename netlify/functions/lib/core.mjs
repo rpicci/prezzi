@@ -99,21 +99,36 @@ export function filterOffers(items, p) {
   const exRe = ex.map((x) => new RegExp("(^|[^a-z0-9])" + x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z0-9]|$)"));
 
   const blocked = new Set(p.blocked || []);
-  let ok = items.filter((i) => i.price > 0 && i.title && !i.used && !blocked.has(offerKey(i)));
-  ok = ok.filter((i) => {
+  const dropped = [];
+  const step = (arr, test) => arr.filter((i) => {
+    const why = test(i);
+    if (!why) return true;
+    dropped.push({ shop: i.shop, title: i.title, price: i.price, why });
+    return false;
+  });
+
+  let ok = step(items, (i) => (!(i.price > 0) || !i.title ? "senza prezzo" : i.used ? "usato" : blocked.has(offerKey(i)) ? "falso positivo segnalato" : null));
+  ok = step(ok, (i) => {
     const c = compact(i.title), t = norm(i.title);
-    return required.every((r) => c.includes(compact(r))) && !exRe.some((re) => re.test(t));
+    const miss = required.find((r) => !c.includes(compact(r)));
+    if (miss) return "manca «" + miss + "»";
+    const k = exRe.findIndex((re) => re.test(t));
+    return k >= 0 ? "contiene «" + ex[k] + "»" : null;
   });
   const matched = ok.length;
-  if (ok.length >= 4) { const m = median(ok.map((i) => i.price)); ok = ok.filter((i) => i.price >= m * 0.4); }
-  if (p.minPrice) ok = ok.filter((i) => i.price >= p.minPrice);
-  if (p.maxPrice) ok = ok.filter((i) => i.price <= p.maxPrice);
+  if (ok.length >= 4) { const m = median(ok.map((i) => i.price)); ok = step(ok, (i) => (i.price < m * 0.4 ? "prezzo troppo basso (accessorio?)" : null)); }
+  if (p.minPrice) ok = step(ok, (i) => (i.price < p.minPrice ? "sotto il prezzo minimo impostato" : null));
+  if (p.maxPrice) ok = step(ok, (i) => (i.price > p.maxPrice ? "sopra il prezzo massimo impostato" : null));
   ok = ok.map((i) => ({ ...i, trusted: isTrusted(i.shop, brand) }));
-  if (p.onlyTrusted) ok = ok.filter((i) => i.trusted);
+  if (p.onlyTrusted) ok = step(ok, (i) => (i.trusted ? null : "negozio non noto"));
 
   const byShop = new Map();
-  for (const i of ok.sort((a, b) => a.price - b.price)) if (!byShop.has(norm(i.shop))) byShop.set(norm(i.shop), i);
-  return { offers: [...byShop.values()], total: items.length, matched };
+  for (const i of ok.sort((a, b) => a.price - b.price)) {
+    const k = norm(i.shop);
+    if (!byShop.has(k)) byShop.set(k, i);
+    else dropped.push({ shop: i.shop, title: i.title, price: i.price, why: "stesso negozio: già presa l'offerta più bassa" });
+  }
+  return { offers: [...byShop.values()], total: items.length, matched, dropped };
 }
 
 // ---------- ricerca prodotto ----------
@@ -132,8 +147,8 @@ async function checkProduct(p, usage) {
   let { items, prov } = await run(p.name);
   let f = filterOffers(items, p);
   if (!f.offers.length && p.ean) { const r2 = await run(p.ean); prov = r2.prov; f = filterOffers(r2.items, p); }
-  const offers = f.offers.slice(0, 6).map((o) => ({ shop: o.shop, title: o.title, price: o.price, link: o.link, trusted: o.trusted }));
-  return { id: p.id, name: p.name, provider: prov, found: f.matched, total: f.total, offers, best: offers[0] || null };
+  const offers = f.offers.slice(0, 10).map((o) => ({ shop: o.shop, title: o.title, price: o.price, link: o.link, trusted: o.trusted }));
+  return { id: p.id, name: p.name, provider: prov, found: f.matched, total: f.total, dropped: f.dropped.slice(0, 25), offers, best: offers[0] || null };
 }
 
 // ---------- push ----------
