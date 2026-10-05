@@ -36,22 +36,60 @@ export function parsePrice(s) {
 }
 
 export const offerKey = (o) => compact(o.shop) + "|" + compact(o.title).slice(0, 60);
+const shopKey = (x) => norm(x).replace(/^www\./, "").replace(/\.(it|com|eu|net|org)$/, "");
+const AGG = ["trovaprezzi", "idealo", "shopmania", "kelkoo", "pagomeno"];
 const minOf = (h) => { if (!h.length) return null; const m = h.reduce((a, b) => (b.p < a.p ? b : a)); return { p: m.p, d: m.d, s: m.s }; };
 
 // ---------- providers ----------
-async function searchSerpapi(q) {
+const TMO = () => AbortSignal.timeout(+process.env.SEARCH_TIMEOUT_MS || 8500);
+
+async function serpapi(params) {
   const url = new URL("https://serpapi.com/search.json");
-  url.search = new URLSearchParams({
-    engine: "google_shopping", q, gl: "it", hl: "it", google_domain: "google.it",
-    api_key: process.env.SERPAPI_KEY,
-  });
-  const r = await fetch(url);
+  url.search = new URLSearchParams({ ...params, api_key: process.env.SERPAPI_KEY });
+  const r = await fetch(url, { signal: TMO() });
   const j = await r.json();
+  if (j.error && /any results/i.test(j.error)) return {};
   if (!r.ok || j.error) throw new Error("SerpApi: " + (j.error || r.status));
+  return j;
+}
+
+// Preferisce il link diretto al negozio; se è un link Google usa la pagina prodotto
+const goodLink = (i) => {
+  const notGoogle = (u) => u && !/^https?:\/\/([a-z0-9-]+\.)*google\.[a-z.]+\//i.test(u);
+  return notGoogle(i.link) ? i.link : i.product_link || i.link || "";
+};
+
+async function searchSerpapi(q) {
+  const j = await serpapi({ engine: "google_shopping", q, gl: "it", hl: "it", google_domain: "google.it" });
   return (j.shopping_results || []).map((i) => ({
     title: i.title, shop: i.source || "", price: i.extracted_price ?? parsePrice(i.price),
-    link: i.link || i.product_link || "", used: !!i.second_hand_condition,
+    link: goodLink(i), used: !!i.second_hand_condition, src: "shopping",
   }));
+}
+
+async function searchAmazon(q) {
+  const j = await serpapi({ engine: "amazon", k: q, amazon_domain: "amazon.it" });
+  return (j.organic_results || []).map((i) => ({
+    title: i.title, shop: "Amazon.it", price: i.extracted_price ?? parsePrice(i.price),
+    link: i.asin ? `https://www.amazon.it/dp/${i.asin}` : i.link || "", used: false, src: "amazon",
+  }));
+}
+
+// Ricerca web classica: siti ufficiali e specializzati che espongono il prezzo nel risultato
+async function searchWeb(q) {
+  const j = await serpapi({ engine: "google", q: q + " prezzo", gl: "it", hl: "it", google_domain: "google.it", num: "20" });
+  return (j.organic_results || []).map((i) => {
+    const rs = i.rich_snippet || {};
+    const ext = [rs.top?.detected_extensions, rs.bottom?.detected_extensions].find((e) => e && e.price != null);
+    let price = ext && (!ext.currency || ext.currency === "€") ? parsePrice(ext.price) : null;
+    if (price == null && !ext) {
+      const txt = [...(rs.top?.extensions || []), ...(rs.bottom?.extensions || [])].find((t) => /€/.test(t));
+      price = txt ? parsePrice(txt) : null;
+    }
+    let host = "";
+    try { host = new URL(i.link).hostname.replace(/^www\./, ""); } catch {}
+    return { title: i.title, shop: host, price, link: i.link || "", used: false, src: "web" };
+  }).filter((i) => i.price > 0);
 }
 
 async function searchSerper(q) {
@@ -59,11 +97,12 @@ async function searchSerper(q) {
     method: "POST",
     headers: { "X-API-KEY": process.env.SERPER_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({ q, gl: "it", hl: "it", num: 40 }),
+    signal: TMO(),
   });
   const j = await r.json();
   if (!r.ok) throw new Error("Serper: " + (j.message || r.status));
   return (j.shopping || []).map((i) => ({
-    title: i.title, shop: i.source || "", price: parsePrice(i.price), link: i.link || "", used: false,
+    title: i.title, shop: i.source || "", price: parsePrice(i.price), link: i.link || "", used: false, src: "shopping",
   }));
 }
 
@@ -108,6 +147,7 @@ export function filterOffers(items, p) {
   });
 
   let ok = step(items, (i) => (!(i.price > 0) || !i.title ? "senza prezzo" : i.used ? "usato" : blocked.has(offerKey(i)) ? "falso positivo segnalato" : null));
+  ok = step(ok, (i) => (AGG.some((x) => norm(i.shop).includes(x)) ? "aggregatore (non è un negozio)" : null));
   ok = step(ok, (i) => {
     const c = compact(i.title), t = norm(i.title);
     const miss = required.find((r) => !c.includes(compact(r)));
@@ -124,7 +164,7 @@ export function filterOffers(items, p) {
 
   const byShop = new Map();
   for (const i of ok.sort((a, b) => a.price - b.price)) {
-    const k = norm(i.shop);
+    const k = shopKey(i.shop);
     if (!byShop.has(k)) byShop.set(k, i);
     else dropped.push({ shop: i.shop, title: i.title, price: i.price, why: "stesso negozio: già presa l'offerta più bassa" });
   }
@@ -132,23 +172,41 @@ export function filterOffers(items, p) {
 }
 
 // ---------- ricerca prodotto ----------
-async function checkProduct(p, usage) {
-  const run = async (q) => {
+async function checkProduct(p, usage, reserve = 0) {
+  const src = { amazon: true, web: true, ...(p.sources || {}) };
+  const notes = [];
+  const lim = +process.env.SERPAPI_LIMIT || 250;
+
+  const shopping = async (q) => {
     let prov = allocate(usage);
-    try { return { items: await call(prov, q), prov }; }
+    try { return await call(prov, q); }
     catch (e) {
-      if (prov === "serpapi" && process.env.SERPER_KEY) {
-        usage.serper = (usage.serper || 0) + 1; prov = "serper";
-        return { items: await call(prov, q), prov };
-      }
+      if (prov === "serpapi" && process.env.SERPER_KEY) { usage.serper = (usage.serper || 0) + 1; return await call("serper", q); }
       throw e;
     }
   };
-  let { items, prov } = await run(p.name);
+  // Amazon e web usano solo SerpApi e lasciano sempre una ricerca di riserva per ogni prodotto
+  const extra = async (name, fn) => {
+    if (!process.env.SERPAPI_KEY) { notes.push(`${name}: serve SERPAPI_KEY`); return []; }
+    if ((usage.serpapi || 0) >= lim - reserve) { notes.push(`${name}: quota SerpApi quasi esaurita, saltata`); return []; }
+    usage.serpapi = (usage.serpapi || 0) + 1;
+    try { return await fn(p.name); } catch (e) { notes.push(`${name}: ${e.name === "TimeoutError" ? "timeout" : e.message}`); return []; }
+  };
+
+  const [main, am, web] = await Promise.all([
+    shopping(p.name),
+    src.amazon ? extra("Amazon", searchAmazon) : [],
+    src.web ? extra("Web", searchWeb) : [],
+  ]);
+  let items = [...main, ...am, ...web];
   let f = filterOffers(items, p);
-  if (!f.offers.length && p.ean) { const r2 = await run(p.ean); prov = r2.prov; f = filterOffers(r2.items, p); }
-  const offers = f.offers.slice(0, 10).map((o) => ({ shop: o.shop, title: o.title, price: o.price, link: o.link, trusted: o.trusted }));
-  return { id: p.id, name: p.name, provider: prov, found: f.matched, total: f.total, dropped: f.dropped.slice(0, 25), offers, best: offers[0] || null };
+  if (!f.offers.length && p.ean) { items = [...items, ...(await shopping(p.ean))]; f = filterOffers(items, p); }
+  const offers = f.offers.slice(0, 10).map((o) => ({ shop: o.shop, title: o.title, price: o.price, link: o.link, trusted: o.trusted, src: o.src }));
+  return {
+    id: p.id, name: p.name, found: f.matched, total: f.total, notes,
+    dropped: f.dropped.slice(0, 25), offers, best: offers[0] || null,
+    counts: { shopping: main.length, amazon: am.length, web: web.length },
+  };
 }
 
 // ---------- push ----------
@@ -186,7 +244,7 @@ export async function runCheck(cfg, { push = false } = {}) {
   if (usage.month !== n.month) { usage.month = n.month; usage.serpapi = 0; }
 
   const results = await Promise.all(
-    cfg.products.map((p) => checkProduct(p, usage).catch((e) => ({ id: p.id, name: p.name, error: e.message })))
+    cfg.products.map((p) => checkProduct(p, usage, cfg.products.length).catch((e) => ({ id: p.id, name: p.name, error: e.message })))
   );
 
   for (const r of results) {
