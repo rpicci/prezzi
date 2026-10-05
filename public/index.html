@@ -61,8 +61,9 @@ dialog::backdrop{background:#000a}
     <div style="flex:1"><label>Prezzo minimo €</label><input id="f_min" inputmode="decimal"></div>
     <div style="flex:1"><label>Prezzo obiettivo €</label><input id="f_tg" inputmode="decimal"></div>
   </div>
-  <label style="font-size:14px;color:var(--tx)"><input type="checkbox" id="f_am"> Cerca anche su Amazon (+1 ricerca/giorno)</label>
-  <label style="font-size:14px;color:var(--tx)"><input type="checkbox" id="f_web"> Cerca sul web: siti ufficiali e specializzati (+1 ricerca/giorno)</label>
+  <label style="font-size:14px;color:var(--tx)"><input type="checkbox" id="f_cmp"> Confronta tutti i negozi della scheda prodotto Google (+1 ricerca/giorno, consigliato)</label>
+  <label style="font-size:14px;color:var(--tx)"><input type="checkbox" id="f_am"> Cerca anche su Amazon (opzionale, +1 ricerca/giorno)</label>
+  <label style="font-size:14px;color:var(--tx)"><input type="checkbox" id="f_web"> Cerca sul web: siti ufficiali (opzionale, +1 ricerca/giorno)</label>
   <label style="font-size:14px;color:var(--tx)"><input type="checkbox" id="f_tr"> Solo negozi noti (Amazon, MediaWorld, Unieuro…)</label>
   <div class="row sp" style="margin-top:14px">
     <button class="r" id="del">Elimina</button>
@@ -109,7 +110,7 @@ function chart(h,target){
 function dropList(r){
   const d=r.dropped||[];
   const c=r.counts||{};
-  const diag=`<div class="mu">Trovati ${r.total} (Shopping ${c.shopping??"–"}, Amazon ${c.amazon??"–"}, Web ${c.web??"–"}) · corrispondenti ${r.found} · offerte valide ${r.offers.length}</div>`+(r.notes||[]).map(n=>`<div class="up">${esc(n)}</div>`).join("");
+  const diag=`<div class="mu">Trovati ${r.total} (Shopping ${c.shopping??"–"}, Negozi ${c.stores??"–"}, Amazon ${c.amazon??"–"}, Web ${c.web??"–"}) · corrispondenti ${r.found} · offerte valide ${r.offers.length}</div>`+(r.notes||[]).map(n=>`<div class="up">${esc(n)}</div>`).join("");
   if(!d.length)return diag;
   return diag+`<details><summary class="mu">Scartati (${d.length})</summary>`+d.map(x=>`<div class="mu" style="padding:5px 0;border-top:1px solid var(--line)"><div class="row sp"><span>${esc(x.shop)} · ${fmt(x.price)}</span><span class="up">${esc(x.why)}</span></div><div>${esc((x.title||"").slice(0,80))}</div></div>`).join("")+`</details>`;
 }
@@ -125,12 +126,12 @@ function card(p){
       let minLine="";
       if(m){minLine=b.price<=m.p?`<div class="dn">🏆 ${r.record?"Nuovo minimo storico":"Al minimo storico"}</div>`
         :`<div class="mu">Minimo storico <b style="color:var(--gold)">${fmt(m.p)}</b> (${fmtD(m.d)}, ${esc(m.s)}) · <span class="up">+${fmt(b.price-m.p)}</span> sopra il minimo</div>`;}
-      body=`<div class="price">${fmt(b.price)}</div><div>${esc(b.shop)}${b.trusted?"":" ⚠"} · <a href="${safe(b.link)}" target="_blank" rel="noopener">apri</a></div>`
+      body=`<div class="price">${fmt(b.price)}</div><div>${esc(b.shop)}${b.trusted?"":" ⚠"} · <a href="${safe(b.link)}" target="_blank" rel="noopener">${b.direct===false?"cerca":"apri"}</a></div>`
       +`<div class="mu">${esc((b.title||"").slice(0,90))}</div>`
       +(d?`<div class="${d<0?"dn":"up"}">${d<0?"▼":"▲"} ${fmt(Math.abs(d))} vs ultimo controllo</div>`:"")
       +minLine+chart(h,p.targetPrice)
       +`<details><summary class="mu">Offerte di oggi (${r.offers.length})</summary>`
-      +r.offers.map((o,i)=>`<div class="mu" style="padding:6px 0;border-top:1px solid var(--line)"><div class="row sp"><span>${esc(o.shop)}${o.trusted?"":" ⚠"} <span class="mono">${esc(o.src||"")}</span></span><a href="${safe(o.link)}" target="_blank" rel="noopener">${fmt(o.price)}</a></div><div class="row sp"><span style="flex:1">${esc((o.title||"").slice(0,70))}</span><button class="r" style="padding:4px 8px;font-size:12px" data-fp="${esc(p.id)}" data-oi="${i}">Falso positivo</button></div></div>`).join("")+`</details>`+dropList(r);
+      +r.offers.map((o,i)=>`<div class="mu" style="padding:6px 0;border-top:1px solid var(--line)"><div class="row sp"><span>${esc(o.shop)}${o.trusted?"":" ⚠"} <span class="mono">${esc(o.src||"")}</span></span><a href="${safe(o.link)}" target="_blank" rel="noopener">${fmt(o.price)}${o.direct===false?" 🔎":""}</a></div><div class="row sp"><span style="flex:1">${esc((o.title||"").slice(0,70))}</span><button class="r" style="padding:4px 8px;font-size:12px" data-fp="${esc(p.id)}" data-oi="${i}">Falso positivo</button></div></div>`).join("")+`</details>`+dropList(r);
     }
   }
   const hist=h.length?`<details><summary class="mu">Storico (${h.length})</summary>`+[...h].reverse().map(x=>`<div class="row sp mu" style="padding:5px 0;border-top:1px solid var(--line)"><span>${fmtD(x.d)} · ${fmt(x.p)} · ${esc(x.s)}</span><button class="r" style="padding:3px 8px;font-size:12px" data-hp="${esc(p.id)}" data-hd="${esc(x.d)}">✕</button></div>`).join("")+`</details>`:"";
@@ -144,7 +145,7 @@ function render(){
   $("#cnt").textContent=c.products.length;$("#add").disabled=c.products.length>=5;
   $("#list").innerHTML=c.products.map(card).join("")||'<div class="mu">Nessun prodotto.</div>';
   const u=S.usage||{};
-  const est=c.products.reduce((a,x)=>a+1+(x.sources?.amazon!==false?1:0)+(x.sources?.web!==false?1:0),0)*30;
+  const est=c.products.reduce((a,x)=>a+1+(x.sources?.compare!==false?1:0)+(x.sources?.amazon===true?1:0)+(x.sources?.web===true?1:0),0)*30;
   $("#usage").innerHTML=`SerpApi: ${u.serpapi||0}/${S.limits.serpapi} questo mese${S.providers.serpapi?"":" (chiave mancante)"}<br>${S.providers.serper?`Serper (riserva): ${u.serper||0} usate in totale<br>`:""}Consumo stimato: ${est} ricerche/mese${est>S.limits.serpapi?' <span class="up">⚠ oltre la quota gratuita: togli Amazon/Web da qualche prodotto</span>':""}`;
   $("#pushbtn").textContent=S.hasSub?"Notifiche attive ✓":"Attiva notifiche push";
   if(S.last)msg("Ultimo controllo: "+new Date(S.last.at).toLocaleString("it-IT")+(S.last.pushed?" · push: "+S.last.pushed:""));
@@ -155,9 +156,19 @@ async function saveConfig(c){const j=await api("config",c);S.config=j.config;ren
 $("#savecfg").onclick=async()=>{try{await saveConfig({...S.config,time:$("#time").value,active:$("#active").checked});msg("Salvato");}catch(e){msg(e.message);}};
 $("#checknow").onclick=async e=>{
   if(!S.config.products.length)return msg("Aggiungi un prodotto");
-  if(!confirm(`Consuma ${S.config.products.length} ricerche della quota. Continuare?`))return;
+  if(!confirm("Consuma alcune ricerche della quota giornaliera. Continuare?"))return;
   e.target.disabled=true;msg("Ricerca in corso…");
-  try{await api("check",{});await load();}catch(x){msg(x.message);}e.target.disabled=false;
+  const before=S.last&&S.last.at;
+  try{
+    await fetch("/.netlify/functions/check-background",{method:"POST",headers:{"content-type":"application/json","x-key":(localStorage.getItem("pw_key")||"").trim()},body:"{}"});
+    for(let i=0;i<40;i++){
+      await new Promise(r=>setTimeout(r,3000));
+      S=await api("state");
+      if((S.last&&S.last.at)!==before){render();break;}
+      if(i===39)msg("Ricerca ancora in corso: ricarica la pagina tra poco.");
+    }
+  }catch(x){msg(x.message);}
+  e.target.disabled=false;
 };
 
 // dialog
@@ -165,7 +176,7 @@ function open(id){
   editing=id;const p=S.config.products.find(x=>x.id===id)||{};
   $("#dt").textContent=id==="new"?"Nuovo prodotto":"Modifica prodotto";
   $("#f_name").value=p.name||"";$("#f_ean").value=p.ean||"";$("#f_ex").value=(p.exclude||[]).join(", ");
-  $("#f_min").value=p.minPrice||"";$("#f_tg").value=p.targetPrice||"";$("#f_tr").checked=!!p.onlyTrusted;$("#f_am").checked=p.sources?p.sources.amazon!==false:true;$("#f_web").checked=p.sources?p.sources.web!==false:true;
+  $("#f_min").value=p.minPrice||"";$("#f_tg").value=p.targetPrice||"";$("#f_tr").checked=!!p.onlyTrusted;$("#f_cmp").checked=p.sources?p.sources.compare!==false:true;$("#f_am").checked=!!(p.sources&&p.sources.amazon);$("#f_web").checked=!!(p.sources&&p.sources.web);
   $("#cands").innerHTML="";$("#del").style.visibility=id==="new"?"hidden":"visible";$("#dlg").showModal();
 }
 $("#add").onclick=()=>open("new");
@@ -193,7 +204,7 @@ $("#ident").onclick=async()=>{
 };
 $("#save").onclick=async()=>{
   const name=$("#f_name").value.trim();if(!name)return;
-  const p={id:editing==="new"?undefined:editing,name,ean:$("#f_ean").value,exclude:$("#f_ex").value.split(",").map(s=>s.trim()).filter(Boolean),minPrice:$("#f_min").value,targetPrice:$("#f_tg").value,onlyTrusted:$("#f_tr").checked,sources:{amazon:$("#f_am").checked,web:$("#f_web").checked}};
+  const p={id:editing==="new"?undefined:editing,name,ean:$("#f_ean").value,exclude:$("#f_ex").value.split(",").map(s=>s.trim()).filter(Boolean),minPrice:$("#f_min").value,targetPrice:$("#f_tg").value,onlyTrusted:$("#f_tr").checked,sources:{compare:$("#f_cmp").checked,amazon:$("#f_am").checked,web:$("#f_web").checked}};
   const list=editing==="new"?[...S.config.products,p]:S.config.products.map(x=>x.id===editing?{...x,...p}:x);
   try{await saveConfig({...S.config,products:list});$("#dlg").close();}catch(e){msg(e.message);}
 };
