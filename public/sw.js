@@ -19,8 +19,8 @@ self.addEventListener("push", (e) => {
   e.waitUntil(
     self.registration.showNotification(d.title || "Price Watch", {
       body: d.body || "",
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      icon: "/icon.svg",
+      badge: "/icon.svg",
       data: { url: d.url || "/" },
     })
   );
